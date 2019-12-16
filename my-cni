@@ -1,0 +1,101 @@
+#!/bin/bash
+config=`cat /dev/stdin`
+
+log="/opt/cni/bin/cni.log"
+usage() {
+cat << EOF
+implement a simple kubernetes cni by shell.
+Available CNI_COMMAND env:
+  ADD        add a container network
+  DEL        delete a container network
+  VERSION    show cni version
+EOF
+}
+
+allocateIP(){
+  if [ -f /opt/cni/bin/last_allocated_ip ]; then
+    ip=$((`cat /opt/cni/bin/last_allocated_ip`+1))
+  else
+    ip=2
+  fi
+  echo ${ip} > /opt/cni/bin/last_allocated_ip
+  echo ${ip}
+}
+
+add() {
+  echo config: "$config" >> "$log"
+  podcidr=$(echo $config | jq -r ".podcidr")
+  podcidr_gw=$(echo $podcidr | sed "s:0/24:1:g")
+  net_number=$(echo $podcidr | sed "s:.0/24:$n:g")
+  echo podcidr: "$podcidr" >> "$log"
+  echo podcidr_gw: "$podcidr_gw" >> "$log"
+  echo net_number: "$net_number" >> "$log"
+  # ensure bridge cni0 exist
+  ip link add cni0 type bridge > /dev/null 2>&1
+  ip link set cni0 up
+  ip addr add "$podcidr_gw"/24 dev cni0
+  veth_id=$(date +%s%N | md5sum | head -c 6)
+  ip link add dev veth_"${veth_id}" type veth peer name veth1_"${veth_id}"
+  ip link set dev veth_"${veth_id}" up
+  ip link set veth_"${veth_id}" master cni0
+  ln -sfT ${CNI_NETNS} /var/run/netns/${CNI_CONTAINERID}
+  ip link set veth1_"${veth_id}" netns ${CNI_CONTAINERID}
+  ip netns exec ${CNI_CONTAINERID} ip link set veth1_"${veth_id}" name ${CNI_IFNAME}
+  ip netns exec ${CNI_CONTAINERID} ip link set dev lo up
+  host_number=`allocateIP`
+  ip netns exec ${CNI_CONTAINERID} ip addr add "$net_number"."$host_number"/24 dev ${CNI_IFNAME}
+  echo "allocate ip "$net_number"."$host_number"" >> "$log"
+  ip netns exec ${CNI_CONTAINERID} ip link set dev ${CNI_IFNAME} up 
+  # set default gw in container
+  ip netns exec ${CNI_CONTAINERID} ip route add default via ${podcidr_gw}
+  echo "completed exec cni add: ${CNI_CONTAINERID}" >> "$log"
+  ip netns exec $CNI_CONTAINERID ip link show >> "$log"
+  mac=$(ip netns exec $CNI_CONTAINERID ip link show ${CNI_IFNAME} | awk '/ether/ {print $2}')
+  address="$net_number"."$host_number"/24
+  output_template='{
+  "cniVersion": "0.3.0",
+  "interfaces": [                                            
+      {
+          "name": "%s",
+          "mac": "%s",                            
+          "sandbox": "%s" 
+      }
+  ],
+  "ips": [
+      {
+          "version": "4",
+          "address": "%s",
+          "gateway": "%s",          
+          "interface": 0 
+      }
+  ]
+}'
+    
+    output=$(printf "${output_template}" $CNI_IFNAME $mac $CNI_NETNS $address $podcidr_gw)
+    echo $output >> "$log"
+    echo "$output"
+}
+
+del() {
+  ip netns exec ${CNI_CONTAINERID} ip link del dev ${CNI_IFNAME}
+}
+
+version() {
+  echo "not implement"
+}
+
+case "${CNI_COMMAND}" in
+  ADD)
+    add
+    ;;
+  DEL)
+    del
+    ;;
+  VERSION)
+    version
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac

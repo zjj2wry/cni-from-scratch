@@ -1,0 +1,165 @@
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: kindnet
+  annotations:
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: docker/default
+    seccomp.security.alpha.kubernetes.io/defaultProfileName: docker/default
+    apparmor.security.beta.kubernetes.io/allowedProfileNames: runtime/default
+    apparmor.security.beta.kubernetes.io/defaultProfileName: runtime/default
+spec:
+  privileged: false
+  volumes:
+    - configMap
+    - secret
+    - emptyDir
+    - hostPath
+  allowedHostPaths:
+    - pathPrefix: "/etc/cni/net.d"
+    - pathPrefix: "/run"
+    - pathPrefix: "/lib"
+  readOnlyRootFilesystem: false
+  # Users and groups
+  runAsUser:
+    rule: RunAsAny
+  supplementalGroups:
+    rule: RunAsAny
+  fsGroup:
+    rule: RunAsAny
+  # Privilege Escalation
+  allowPrivilegeEscalation: false
+  defaultAllowPrivilegeEscalation: false
+  # Capabilities
+  allowedCapabilities: ["NET_RAW", "NET_ADMIN"]
+  defaultAddCapabilities: []
+  requiredDropCapabilities: []
+  # Host namespaces
+  hostPID: false
+  hostIPC: false
+  hostNetwork: true
+  hostPorts:
+  - min: 0
+    max: 65535
+  # SELinux
+  seLinux:
+    rule: 'RunAsAny'
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: kindnet
+rules:
+  - apiGroups:
+    - policy
+    resources:
+    - podsecuritypolicies
+    verbs:
+    - use
+    resourceNames: 
+    - kindnet
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - list
+      - watch
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: kindnet
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kindnet
+subjects:
+- kind: ServiceAccount
+  name: kindnet
+  namespace: kube-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kindnet
+  namespace: kube-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kindnet
+  namespace: kube-system
+  labels:
+    tier: node
+    app: kindnet
+    k8s-app: kindnet
+spec:
+  selector:
+    matchLabels:
+      app: kindnet
+  template:
+    metadata:
+      labels:
+        tier: node
+        app: kindnet
+        k8s-app: kindnet
+    spec:
+      hostNetwork: true
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      serviceAccountName: kindnet
+      containers:
+      - name: kindnet-cni
+        image: mycni/mycni:v0.1.0
+        # command:
+        #   - /bin/sh
+        #   - -c
+        #   - sleep 5000
+        env:
+        - name: HOST_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        # - name: POD_SUBNET
+        #   value: {{ .PodSubnet }}
+        volumeMounts:
+        - name: cni-cfg
+          mountPath: /etc/cni/net.d
+        - mountPath: /opt/cni/bin
+          name: cni-bin-dir
+        - name: xtables-lock
+          mountPath: /run/xtables.lock
+          readOnly: false
+        - name: lib-modules
+          mountPath: /lib/modules
+          readOnly: true
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "50Mi"
+          limits:
+            cpu: "100m"
+            memory: "50Mi"
+        securityContext:
+          privileged: true
+          capabilities:
+            add: ["NET_RAW", "NET_ADMIN"]
+      volumes:
+      - name: cni-cfg
+        hostPath:
+          path: /etc/cni/net.d
+      - name: cni-bin-dir
+        hostPath:
+          path: /opt/cni/bin
+      - name: xtables-lock
+        hostPath:
+          path: /run/xtables.lock
+          type: FileOrCreate
+      - name: lib-modules
+        hostPath:
+          path: /lib/modules
