@@ -10,7 +10,7 @@ Vagrant.configure(2) do |config|
 		node.vm.hostname="node#{i}"
 		# 设置虚拟机的IP
 		node.vm.network "public_network",
-	      use_dhcp_assigned_default_route: true
+	      		use_dhcp_assigned_default_route: true
 		# 设置主机与虚拟机的共享目录
 		config.vm.synced_folder "./", "/home/vagrant"
 		# VirtaulBox相关配置
