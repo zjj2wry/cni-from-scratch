@@ -263,8 +263,8 @@ Vagrant.configure(2) do |config|
 		# 设置虚拟机的主机名
 		node.vm.hostname="node#{i}"
 		# 设置虚拟机的IP
-      node.vm.network "public_network",
-         # 设置为默认网关
+      		node.vm.network "public_network",
+         	# 设置为默认网关
 			use_dhcp_assigned_default_route: true
 		# 设置主机与虚拟机的共享目录
 		config.vm.synced_folder "./", "/home/vagrant"
